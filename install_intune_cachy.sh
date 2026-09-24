@@ -92,3 +92,26 @@ sudo -u "$REAL_USER" env \
   WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
   XDG_RUNTIME_DIR="/run/user/$(id -u "$REAL_USER")" \
   /opt/microsoft/intune/bin/intune-portal
+
+# ==============================================================================
+# Post-Enrollment: Configure Systemd Daemon & Persistence for CachyOS
+# ==============================================================================
+
+echo "--> Enabling user session lingering..."
+sudo loginctl enable-linger "$USER"
+
+echo "--> Overriding intune-daemon systemd unit to enforce auto-restart..."
+sudo mkdir -p /etc/systemd/system/intune-daemon.service.d
+
+cat << 'EOF' | sudo tee /etc/systemd/system/intune-daemon.service.d/override.conf > /dev/null
+[Service]
+Restart=always
+RestartSec=5s
+EOF
+
+echo "--> Enabling and starting Intune sockets and services..."
+sudo systemctl daemon-reload
+sudo systemctl enable --now intune-daemon.socket
+sudo systemctl enable --now intune-daemon.service
+
+echo "--> CachyOS Intune persistence setup complete!"
