@@ -92,15 +92,21 @@ sudo -u "$REAL_USER" env \
   WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
   XDG_RUNTIME_DIR="/run/user/$(id -u "$REAL_USER")" \
   /opt/microsoft/intune/bin/intune-portal
+  
+read -p "Press [ENTER] once device enrollment is complete in the GUI to setup background sync..."
 
 # ==============================================================================
 # Post-Enrollment: Configure Systemd Daemon & Persistence for CachyOS
 # ==============================================================================
 
-echo "--> Enabling user session lingering..."
+echo "=== Starting Microsoft Intune Post-Enrollment Setup ==="
+
+# 1. Enable User Lingering
+echo "--> Enabling systemd user session lingering..."
 sudo loginctl enable-linger "$USER"
 
-echo "--> Overriding intune-daemon systemd unit to enforce auto-restart..."
+# 2. Configure System Daemon Override (Prevents 10-Min Idle Timeout)
+echo "--> Setting up systemd override for intune-daemon.service..."
 sudo mkdir -p /etc/systemd/system/intune-daemon.service.d
 
 cat << 'EOF' | sudo tee /etc/systemd/system/intune-daemon.service.d/override.conf > /dev/null
@@ -109,9 +115,47 @@ Restart=always
 RestartSec=5s
 EOF
 
-echo "--> Enabling and starting Intune sockets and services..."
+# 3. Reload and Enable System-Level Sockets & Services
+echo "--> Reloading systemd and enabling intune-daemon socket..."
 sudo systemctl daemon-reload
 sudo systemctl enable --now intune-daemon.socket
 sudo systemctl enable --now intune-daemon.service
 
-echo "--> CachyOS Intune persistence setup complete!"
+# 4. Configure User-Level Hourly Sync Timer & Service
+echo "--> Creating user-level systemd sync service and timer..."
+mkdir -p ~/.config/systemd/user
+
+# User Service Unit
+cat << 'EOF' > ~/.config/systemd/user/intune-sync.service
+[Unit]
+Description=Intune Automatic Hourly Sync
+
+[Service]
+Type=oneshot
+Environment="XDG_RUNTIME_DIR=/run/user/%U"
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus"
+ExecStart=/opt/microsoft/intune/bin/intune-agent
+EOF
+
+# User Timer Unit
+cat << 'EOF' > ~/.config/systemd/user/intune-sync.timer
+[Unit]
+Description=Run Intune Sync Hourly
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# 5. Enable and Start User Sync Timer
+echo "--> Enabling user sync timer..."
+systemctl --user daemon-reload
+systemctl --user enable --now intune-sync.timer
+
+echo "=== Setup Complete! ==="
+echo "Verifying setup status:"
+systemctl --user list-timers intune-sync.timer
